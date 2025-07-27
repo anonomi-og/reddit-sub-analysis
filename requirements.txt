@@ -1,0 +1,5 @@
+asyncpraw
+google-cloud-bigquery
+google-cloud-secret-manager
+pandas
+aiohttp
