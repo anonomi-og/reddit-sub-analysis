@@ -28,3 +28,10 @@ This repository contains utilities for collecting and analysing Reddit content i
    The script expects `OPENAI_API_KEY` to be available (for example in a `.env` file).
 
 
+## run with...
++venv\Scripts\python.exe main.py --subreddit Leicester --days 365 --project subreddit-analysis-467210 --dataset subreddit
++
++
++run classify with
++
++venv\Scripts\python.exe classify_posts.py --project subreddit-analysis-467210 --dataset subreddit --subreddit Leicester --lookback_days 365 --k 8
