@@ -97,6 +97,32 @@ def init_reddit():
         check_for_async=False,
     )
 
+def fetch_backwards(reddit, sub, start_ts, end_ts):
+    sr = reddit.subreddit(sub)
+    while end_ts > start_ts:
+        page = sr.search(
+            query="",                      # blank == match everything
+            sort="new",
+            limit=None,                    # PRAW auto‑paginates 100 at a time
+            params={
+                "before": int(end_ts),
+                "syntax": "lucene"
+            },
+        )
+        empty = True
+        oldest = None
+        for post in page:
+            empty = False
+            if post.created_utc < start_ts:
+                return                      # reached our target window
+            yield post
+            oldest = post.created_utc if oldest is None else min(oldest, post.created_utc)
+        if empty:
+            break                           # nothing more returned
+        end_ts = int(oldest) - 1
+        # 👉 progress message
+        print(f"↘ paging back to {dt.datetime.fromtimestamp(end_ts, dt.timezone.utc):%Y‑%m‑%d}")
+
 
 def fetch_window(reddit: praw.Reddit, sub: str, start_ts: int, end_ts: int):
     """Iterate r/<sub>.new() until we pass start_ts; filter in‑window."""
@@ -142,7 +168,7 @@ def main():
     posts_batch: List[Dict] = []
     comments_batch: List[Dict] = []
 
-    for s in fetch_window(reddit, args.subreddit, start_ts, end_ts):
+    for s in fetch_backwards(reddit, args.subreddit, start_ts, end_ts):
         total_posts += 1
         posts_batch.append({
             "id": s.id,
