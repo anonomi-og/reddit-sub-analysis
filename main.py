@@ -1,24 +1,16 @@
-import os
-import sys
-import argparse
-import time
-import datetime as dt
+import os, sys, argparse, time, datetime as dt
 from typing import List, Dict
 
 import praw
-from google.cloud import bigquery
-from google.cloud import secretmanager
+from google.cloud import bigquery, secretmanager
 from dotenv import load_dotenv
 
 # ---------------------------------------------------------------------------
 # Utility helpers
 # ---------------------------------------------------------------------------
-
-
 def load_env():
     if os.path.exists(".env"):
         load_dotenv(".env")
-
 
 def get_secret(project_id: str, name: str) -> str:
     try:
@@ -29,15 +21,12 @@ def get_secret(project_id: str, name: str) -> str:
     except Exception:
         return os.getenv(name)
 
-
 def utc_ts(d: dt.datetime) -> int:
     return int(d.timestamp())
 
 # ---------------------------------------------------------------------------
 # BigQuery helpers
 # ---------------------------------------------------------------------------
-
-
 def ensure_tables(project: str, dataset: str):
     bq = bigquery.Client(project=project)
     ds_ref = bigquery.DatasetReference(project, dataset)
@@ -48,8 +37,12 @@ def ensure_tables(project: str, dataset: str):
         ds.location = "EU"
         bq.create_dataset(ds, exists_ok=True)
 
+    # ------------------------------------------------------------------
+    # ✨  SCHEMAS – extra columns appended at the end (all NULLABLE) ✨
+    # ------------------------------------------------------------------
     schemas = {
         "posts": [
+            # core
             ("id", "STRING", True),
             ("subreddit", "STRING", False),
             ("created_utc", "TIMESTAMP", False),
@@ -58,8 +51,28 @@ def ensure_tables(project: str, dataset: str):
             ("selftext", "STRING", False),
             ("score", "INTEGER", False),
             ("num_comments", "INTEGER", False),
+            # extras
+            ("upvote_ratio", "FLOAT", False),
+            ("total_awards_received", "INTEGER", False),
+            ("gilded", "INTEGER", False),
+            ("num_crossposts", "INTEGER", False),
+            ("over_18", "BOOLEAN", False),
+            ("spoiler", "BOOLEAN", False),
+            ("stickied", "BOOLEAN", False),
+            ("locked", "BOOLEAN", False),
+            ("edited", "TIMESTAMP", False),
+            ("link_flair_text", "STRING", False),
+            ("link_flair_template_id", "STRING", False),
+            ("author_flair_text", "STRING", False),
+            ("author_flair_template_id", "STRING", False),
+            ("is_self", "BOOLEAN", False),
+            ("url", "STRING", False),
+            ("domain", "STRING", False),
+            ("post_hint", "STRING", False),
+            ("is_video", "BOOLEAN", False),
         ],
         "comments": [
+            # core
             ("id", "STRING", True),
             ("subreddit", "STRING", False),
             ("link_id", "STRING", False),
@@ -68,6 +81,12 @@ def ensure_tables(project: str, dataset: str):
             ("author", "STRING", False),
             ("body", "STRING", False),
             ("score", "INTEGER", False),
+            # extras
+            ("controversiality", "INTEGER", False),
+            ("total_awards_received", "INTEGER", False),
+            ("gilded", "INTEGER", False),
+            ("depth", "INTEGER", False),
+            ("edited", "TIMESTAMP", False),
         ],
     }
 
@@ -77,9 +96,14 @@ def ensure_tables(project: str, dataset: str):
         try:
             bq.get_table(ref)
         except Exception:
-            schema = [bigquery.SchemaField(n, t, mode="REQUIRED" if req else "NULLABLE") for n, t, req in fields]
+            schema = [
+                bigquery.SchemaField(n, t, mode="REQUIRED" if req else "NULLABLE")
+                for n, t, req in fields
+            ]
             t = bigquery.Table(ref, schema=schema)
-            t.time_partitioning = bigquery.TimePartitioning(bigquery.TimePartitioningType.DAY, field="created_utc")
+            t.time_partitioning = bigquery.TimePartitioning(
+                bigquery.TimePartitioningType.DAY, field="created_utc"
+            )
             bq.create_table(t, exists_ok=True)
         refs[tbl] = ref
     return refs["posts"], refs["comments"], bq
@@ -87,8 +111,6 @@ def ensure_tables(project: str, dataset: str):
 # ---------------------------------------------------------------------------
 # Reddit helpers
 # ---------------------------------------------------------------------------
-
-
 def init_reddit():
     return praw.Reddit(
         client_id=os.environ["REDDIT_CLIENT_ID"],
@@ -101,43 +123,27 @@ def fetch_backwards(reddit, sub, start_ts, end_ts):
     sr = reddit.subreddit(sub)
     while end_ts > start_ts:
         page = sr.search(
-            query="",                      # blank == match everything
-            sort="new",
-            limit=None,                    # PRAW auto‑paginates 100 at a time
-            params={
-                "before": int(end_ts),
-                "syntax": "lucene"
-            },
+            "", sort="new", syntax="lucene", limit=None,
+            params={"before": int(end_ts)},
         )
-        empty = True
-        oldest = None
+        empty, oldest = True, None
         for post in page:
             empty = False
             if post.created_utc < start_ts:
-                return                      # reached our target window
+                return
             yield post
             oldest = post.created_utc if oldest is None else min(oldest, post.created_utc)
         if empty:
-            break                           # nothing more returned
-        end_ts = int(oldest) - 1
-        # 👉 progress message
-        print(f"↘ paging back to {dt.datetime.fromtimestamp(end_ts, dt.timezone.utc):%Y‑%m‑%d}")
-
-
-def fetch_window(reddit: praw.Reddit, sub: str, start_ts: int, end_ts: int):
-    """Iterate r/<sub>.new() until we pass start_ts; filter in‑window."""
-    sr = reddit.subreddit(sub)
-    for post in sr.new(limit=None):  # Reddit caps at ~1000, fine for small subs
-        if post.created_utc < start_ts:
             break
-        if start_ts <= post.created_utc <= end_ts:
-            yield post
+        end_ts = int(oldest) - 1
+        print(
+            f"↘ paging back to "
+            f"{dt.datetime.fromtimestamp(end_ts, dt.timezone.utc):%Y‑%m‑%d}"
+        )
 
 # ---------------------------------------------------------------------------
 # Main
 # ---------------------------------------------------------------------------
-
-
 def main():
     load_env()
 
@@ -153,7 +159,7 @@ def main():
 
     for key in ["REDDIT_CLIENT_ID", "REDDIT_CLIENT_SECRET"]:
         if not os.environ.get(key):
-            os.environ[key] = get_secret(args.project, key.lower())
+            os.environ[key] = get_secret(args.project, key)  # keep original case
 
     reddit = init_reddit()
     posts_ref, comments_ref, bq = ensure_tables(args.project, args.dataset)
@@ -179,6 +185,28 @@ def main():
             "selftext": s.selftext,
             "score": s.score,
             "num_comments": s.num_comments,
+            # extras
+            "upvote_ratio": s.upvote_ratio,
+            "total_awards_received": s.total_awards_received,
+            "gilded": s.gilded,
+            "num_crossposts": s.num_crossposts,
+            "over_18": s.over_18,
+            "spoiler": s.spoiler,
+            "stickied": s.stickied,
+            "locked": s.locked,
+            "edited": (
+                dt.datetime.fromtimestamp(s.edited, dt.timezone.utc).isoformat()
+                if isinstance(s.edited, (int, float)) else None
+            ),
+            "link_flair_text": s.link_flair_text,
+            "link_flair_template_id": s.link_flair_template_id,
+            "author_flair_text": s.author_flair_text,
+            "author_flair_template_id": s.author_flair_template_id,
+            "is_self": s.is_self,
+            "url": s.url,
+            "domain": s.domain,
+            "post_hint": getattr(s, "post_hint", None),
+            "is_video": s.is_video,
         })
 
         s.comments.replace_more(limit=None)
@@ -193,6 +221,15 @@ def main():
                 "author": getattr(c.author, "name", None),
                 "body": c.body,
                 "score": c.score,
+                # extras
+                "controversiality": c.controversiality,
+                "total_awards_received": c.total_awards_received,
+                "gilded": c.gilded,
+                "depth": c.depth,
+                "edited": (
+                    dt.datetime.fromtimestamp(c.edited, dt.timezone.utc).isoformat()
+                    if isinstance(c.edited, (int, float)) else None
+                ),
             })
 
         if len(posts_batch) >= 200:
@@ -213,7 +250,6 @@ def main():
         bq.insert_rows_json(comments_ref, comments_batch)
 
     print(f"✅ Done. {total_posts} posts and {total_comments} comments ingested.")
-
 
 if __name__ == "__main__":
     main()
