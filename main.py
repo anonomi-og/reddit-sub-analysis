@@ -119,6 +119,17 @@ def init_reddit():
         check_for_async=False,
     )
 
+def fetch_window(reddit: praw.Reddit, sub: str, start_ts: int, end_ts: int):
+    """Iterate r/<sub>.new() until we pass start_ts; filter in‑window."""
+    sr = reddit.subreddit(sub)
+    for post in sr.new(limit=None):  # Reddit caps at ~1000
+        if post.created_utc < start_ts:
+            break
+        if start_ts <= post.created_utc <= end_ts:
+            yield post
+
+
+
 def fetch_backwards(reddit, sub, start_ts, end_ts):
     sr = reddit.subreddit(sub)
     while end_ts > start_ts:
@@ -174,7 +185,7 @@ def main():
     posts_batch: List[Dict] = []
     comments_batch: List[Dict] = []
 
-    for s in fetch_backwards(reddit, args.subreddit, start_ts, end_ts):
+    for s in fetch_window(reddit, args.subreddit, start_ts, end_ts):
         total_posts += 1
         posts_batch.append({
             "id": s.id,
@@ -185,29 +196,27 @@ def main():
             "selftext": s.selftext,
             "score": s.score,
             "num_comments": s.num_comments,
-            # extras
-            "upvote_ratio": s.upvote_ratio,
-            "total_awards_received": s.total_awards_received,
-            "gilded": s.gilded,
-            "num_crossposts": s.num_crossposts,
-            "over_18": s.over_18,
-            "spoiler": s.spoiler,
-            "stickied": s.stickied,
-            "locked": s.locked,
-            "edited": (
-                dt.datetime.fromtimestamp(s.edited, dt.timezone.utc).isoformat()
-                if isinstance(s.edited, (int, float)) else None
-            ),
-            "link_flair_text": s.link_flair_text,
-            "link_flair_template_id": s.link_flair_template_id,
-            "author_flair_text": s.author_flair_text,
-            "author_flair_template_id": s.author_flair_template_id,
-            "is_self": s.is_self,
-            "url": s.url,
-            "domain": s.domain,
+            # safe optional fields
+            "upvote_ratio": getattr(s, "upvote_ratio", None),
+            "total_awards_received": getattr(s, "total_awards_received", None),
+            "gilded": getattr(s, "gilded", None),
+            "num_crossposts": getattr(s, "num_crossposts", None),
+            "over_18": getattr(s, "over_18", None),
+            "spoiler": getattr(s, "spoiler", None),
+            "stickied": getattr(s, "stickied", None),
+            "locked": getattr(s, "locked", None),
+            "edited": dt.datetime.fromtimestamp(s.edited, dt.timezone.utc).isoformat() if isinstance(s.edited, (int, float)) else None,
+            "link_flair_text": getattr(s, "link_flair_text", None),
+            "link_flair_template_id": getattr(s, "link_flair_template_id", None),
+            "author_flair_text": getattr(s, "author_flair_text", None),
+            "author_flair_template_id": getattr(s, "author_flair_template_id", None),
+            "is_self": getattr(s, "is_self", None),
+            "url": getattr(s, "url", None),
+            "domain": getattr(s, "domain", None),
             "post_hint": getattr(s, "post_hint", None),
-            "is_video": s.is_video,
+            "is_video": getattr(s, "is_video", None),
         })
+
 
         s.comments.replace_more(limit=None)
         for c in s.comments.list():
